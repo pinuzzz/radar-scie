@@ -73,7 +73,7 @@ def radar():
             import base64
     
     # Inserisci qui dentro il nome utente e la password del tuo account OpenSky
-    username = "zampata"
+    username = "Zampata76"
     password = "Zampatasky76!"
     
     # Codifica le credenziali in formato di sicurezza standard per i server
