@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Questa funzione permette al tuo sito Aruba di dialogare in sicurezza con Render
+# Abilita la comunicazione sicura con il tuo sito Aruba (CORS)
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
@@ -18,7 +18,7 @@ def quota_in_pressione_hpa(altitudine_metri):
     return 1013.25 * (1 - 0.0000065 * altitudine_metri)**5.256
 
 def mappa_pressione_livello_meteo(pressione_hpa):
-    livelli_standard = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10]
+    livelli_standard = [100, 150, 200, 250, 300, 400, 500, 700, 850, 925, 1000]
     return min(livelli_standard, key=lambda x: abs(x - pressione_hpa))
 
 def ottieni_meteo_in_quota(lat, lon, pressione_target_hpa):
@@ -26,13 +26,13 @@ def ottieni_meteo_in_quota(lat, lon, pressione_target_hpa):
     url = f"https://open-meteo.com{lat}&longitude={lon}&hourly=temperature_{livello}hPa,relative_humidity_{livello}hPa&forecast_days=1"
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=8) as response:
             dati = json.loads(response.read().decode())
             temp = dati["hourly"][f"temperature_{livello}hPa"][0]
             umi = dati["hourly"][f"relative_humidity_{livello}hPa"][0]
             return temp, umi
     except:
-        return -52.0, 60.0
+        return -50.0, 60.0 # Valori standard di sicurezza se il meteo fallisce
 
 def analizza_scia(altitudine_metri, temp_celsius, umidita_relativa):
     E_H2O, Q, cp, eta = 1.25, 43.0e6, 1004.0, 0.3
@@ -49,34 +49,49 @@ def analizza_scia(altitudine_metri, temp_celsius, umidita_relativa):
 
 @app.route('/api/radar')
 def radar():
+    # Riceve la posizione REALE inviata dal browser dell'utente
     lat = float(request.args.get('lat', 41.9))
     lon = float(request.args.get('lon', 12.5))
     
-    # Traffico simulato ad alta quota sopra la posizione dell'utente
-    voli = [
-        {"callsign": "ITA102", "offset_lat": 0.05, "offset_lon": -0.05, "quota": 11000},
-        {"callsign": "RYR456", "offset_lat": -0.08, "offset_lon": 0.09, "quota": 9800},
-        {"callsign": "UAE05A", "offset_lat": 0.12, "offset_lon": 0.02, "quota": 11500},
-        {"callsign": "DLH231", "offset_lat": -0.03, "offset_lon": -0.11, "quota": 8500}
-    ]
+    # Crea un'area di scansione reale di circa 30km intorno all'utente
+    delta = 0.3
+    url_opensky = f"https://opensky-network.org{lat-delta}&lamax={lat+delta}&lomin={lon-delta}&lomax={lon+delta}"
     
     risultati = []
-    for v in voli:
-        v_lat = lat + v["offset_lat"]
-        v_lon = lon + v["offset_lon"]
-        pressione = quota_in_pressione_hpa(v["quota"])
-        temp, umi = ottieni_meteo_in_quota(v_lat, v_lon, pressione)
-        verdetto, _ = analizza_scia(v["quota"], temp, umi)
+    try:
+        req = urllib.request.Request(url_opensky, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=8) as response:
+            stati = json.loads(response.read().decode()).get("states", []) or []
+            
+            # Prende i veri aerei reali tracciati dal radar in questo istante
+            for volo in stati[:6]: # Analizza al massimo 6 aerei per volta per essere veloce
+                callsign = volo[1].strip() if volo[1] else "IGNOTO"
+                v_lon = volo[5]
+                v_lat = volo[6]
+                altitudine = volo[7] # Quota barometrica reale in metri
+                
+                # Esclude elicotteri o aerei privati troppo bassi (sotto i 6000m non fanno scie)
+                if altitudine is None or altitudine < 6000:
+                    continue
+                    
+                pressione = quota_in_pressione_hpa(altitudine)
+                temp, umi = ottieni_meteo_in_quota(v_lat, v_lon, pressione)
+                
+                if temp is not None:
+                    verdetto, _ = analizza_scia(altitudine, temp, umi)
+                    risultati.append({
+                        "callsign": callsign,
+                        "lat": v_lat,
+                        "lon": v_lon,
+                        "quota": int(altitudine),
+                        "temp": round(temp, 1),
+                        "umi": int(umi),
+                        "scia": verdetto
+                    })
+    except Exception as e:
+        # Se il server dei voli è saturo, restituisce un errore pulito gestito dall'HTML
+        return jsonify([])
         
-        risultati.append({
-            "callsign": v["callsign"],
-            "lat": v_lat,
-            "lon": v_lon,
-            "quota": v["quota"],
-            "temp": round(temp, 1),
-            "umi": int(umi),
-            "scia": verdetto
-        })
     return jsonify(risultati)
 
 if __name__ == '__main__':
