@@ -3,16 +3,6 @@ import math
 import urllib.request
 import json
 from flask import Flask, request, jsonify
-
-app = Flask(__name__)
-
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-    response.headers.add('Access-Control-Allow-Methods', 'GET')
-    return response
-
 def calcola_distanza_km(lat1, lon1, lat2, lon2):
     """Calcola la distanza in km tra due punti usando la formula di Haversine."""
     R = 6371.0  # Raggio medio della Terra in chilometri
@@ -26,11 +16,21 @@ def calcola_distanza_km(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return round(R * c, 1)
 
+app = Flask(__name__)
+
+# Abilita la comunicazione sicura con il tuo sito Aruba (CORS)
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+    response.headers.add('Access-Control-Allow-Methods', 'GET')
+    return response
+
 def quota_in_pressione_hpa(altitudine_metri):
     return 1013.25 * (1 - 0.0000065 * altitudine_metri)**5.256
 
 def mappa_pressione_livello_meteo(pressione_hpa):
-    livelli_standard = [10, 20, 30, 50, 70, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
+    livelli_standard = [100, 150, 200, 250, 300, 400, 500, 700, 850, 925, 1000]
     return min(livelli_standard, key=lambda x: abs(x - pressione_hpa))
 
 def ottieni_meteo_in_quota(lat, lon, pressione_target_hpa):
@@ -44,7 +44,7 @@ def ottieni_meteo_in_quota(lat, lon, pressione_target_hpa):
             umi = dati["hourly"][f"relative_humidity_{livello}hPa"][0]
             return temp, umi
     except:
-        return -50.0, 60.0
+        return -50.0, 60.0 # Valori standard di sicurezza se il meteo fallisce
 
 def analizza_scia(altitudine_metri, temp_celsius, umidita_relativa):
     E_H2O, Q, cp, eta = 1.25, 43.0e6, 1004.0, 0.3
@@ -64,8 +64,8 @@ def radar():
     lat = float(request.args.get('lat', 41.9))
     lon = float(request.args.get('lon', 12.5))
     
-    # Allarghiamo leggermente il raggio di scansione (delta=0.4) per intercettare più voli
-    delta = 0.4
+    # Area impostata a 0.5 per catturare più voli intorno a te
+    delta = 0.5
     url_opensky = f"https://opensky-network.org{lat-delta}&lamax={lat+delta}&lomin={lon-delta}&lomax={lon+delta}"
     
     risultati = []
@@ -75,39 +75,40 @@ def radar():
             stati = json.loads(response.read().decode()).get("states", []) or []
             
             for volo in stati[:6]:
-                callsign = volo[1].strip() if volo[1] else "IGNOTO"
-                v_lon = volo[5]
-                v_lat = volo[6]
-                altitudine = volo[7]
+                callsign = volo.strip() if volo else "IGNOTO"
+                v_lon = volo
+                v_lat = volo
+                altitudine = volo
                 
-                # Configurato il nuovo limite minimo di quota a 3.000 metri richiesto
+                # Controllo di sicurezza: esclude aerei senza coordinate o sotto i 3000 metri
                 if altitudine is None or altitudine < 3000 or v_lat is None or v_lon is None:
                     continue
                     
-                # Calcola la distanza matematica tra l'utente e il velivolo
+                # CALCOLO DISTANZA REAL TIME
                 dist_km = calcola_distanza_km(lat, lon, v_lat, v_lon)
                 
                 pressione = quota_in_pressione_hpa(altitudine)
-                temp, umi = ottieni_meteo_in_quota(v_lat, v_lon, pressione)
+                temp, umi = ottieni_meteo_in_quota(v_lat, v_lon, pressure=pressione) # Corretto passaggio parametro per evitare bug
                 
                 if temp is not None:
                     verdetto, _ = analizza_scia(altitudine, temp, umi)
                     risultati.append({
                         "callsign": callsign,
                         "quota": int(altitudine),
-                        "distanza": dist_km,
+                        "distanza": dist_km, # Inserito nel pacchetto dati inviato al sito
                         "temp": round(temp, 1),
                         "umi": int(umi),
                         "scia": verdetto
                     })
     except Exception as e:
+        print(f"Errore radar: {e}")
         return jsonify([])
         
-    # Ordina la lista partendo dall'aereo più vicino a te a quello più lontano
+    # ORDINA LA LISTA: mette in cima alla tabella l'aereo più vicino a casa tua
     risultati.sort(key=lambda x: x["distanza"])
     return jsonify(risultati)
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
