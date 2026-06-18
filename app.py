@@ -70,7 +70,20 @@ def radar():
     
     risultati = []
     try:
-        req = urllib.request.Request(url_opensky, headers={'User-Agent': 'Mozilla/5.0'})
+            import base64
+    
+    # Inserisci qui dentro il nome utente e la password del tuo account OpenSky
+    username = "zampata"
+    password = "Zampatasky76!"
+    
+    # Codifica le credenziali in formato di sicurezza standard per i server
+    auth_str = f"{username}:{password}"
+    auth_b64 = base64.b64encode(auth_str.encode()).decode()
+    
+    req = urllib.request.Request(url_opensky)
+    req.add_header('User-Agent', 'Mozilla/5.0')
+    req.add_header('Authorization', f'Basic {auth_b64}')
+
         with urllib.request.urlopen(req, timeout=8) as response:
             stati = json.loads(response.read().decode()).get("states", []) or []
             
