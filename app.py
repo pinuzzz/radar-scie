@@ -71,7 +71,7 @@ def radar():
                 altitudine = volo[7] # Quota barometrica reale in metri
                 
                 # Esclude elicotteri o aerei privati troppo bassi (sotto i 6000m non fanno scie)
-                if altitudine is None or altitudine < 6000:
+                if altitudine is None or altitudine < 3000:
                     continue
                     
                 pressione = quota_in_pressione_hpa(altitudine)
